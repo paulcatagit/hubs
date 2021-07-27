@@ -2,6 +2,8 @@ import { disposeTexture } from "../utils/material-utils";
 import { createVideoOrAudioEl } from "../utils/media-utils";
 import { findNode } from "../utils/three-utils";
 
+const prevTargetsVisibility = [];
+
 /**
  * @component video-texture-source
  * This component is intended to be used on entities with a Camera Object3D as a child.
@@ -17,6 +19,7 @@ AFRAME.registerComponent("video-texture-source", {
   },
 
   init() {
+    this.targets = [];
     this.camera = findNode(this.el.object3D, n => n.isCamera);
 
     if (!this.camera) {
@@ -70,7 +73,21 @@ AFRAME.registerComponent("video-texture-source", {
     renderer.vr.enabled = false;
 
     renderer.setRenderTarget(this.renderTarget);
+    // Make video-texture-target objects inivisible before rendering to the frame buffer
+    // Chromium checks for loops when drawing to a framebuffer so if we don't exclude the objects
+    // that are using that rendertarget's texture we get an error. Firefox does not check.
+    // https://chromium.googlesource.com/chromium/src/+/460cac969e2e9ac38a2611be1a32db0361d88bfb/gpu/command_buffer/service/gles2_cmd_decoder.cc#9516
+    prevTargetsVisibility.length = this.targets.length;
+    for (let i = 0; i < this.targets.length; i++) {
+      prevTargetsVisibility[i] = this.targets[i].visible;
+      this.targets[i].visible = false;
+    }
     renderer.render(sceneEl.object3D, this.camera);
+    // Restore the video-texture-target objects visibility
+    for (let i = 0; i < this.targets.length; i++) {
+      this.targets[i].visible = prevTargetsVisibility[i];
+    }
+    prevTargetsVisibility.length = 0;
     renderer.setRenderTarget(null);
 
     renderer.vr.enabled = tmpVRFlag;
@@ -131,6 +148,10 @@ AFRAME.registerComponent("video-texture-target", {
 
       if (this.data.srcEl) {
         const videoTextureSource = this.data.srcEl.components["video-texture-source"];
+
+        // Add this target to the video-texture-source targets exclusion list
+        videoTextureSource.targets.push(this.el.object3D);
+
         const texture = videoTextureSource.renderTarget.texture;
         this.applyTexture(texture);
 
@@ -210,6 +231,12 @@ AFRAME.registerComponent("video-texture-target", {
   remove() {
     // element sources can be shared and are expected to manage their own resources
     if (this.data.src === "el") return;
+
+    const videoTextureSource = this.data.srcEl.components["video-texture-source"];
+    const index = videoTextureSource.targets.indexOf(this.el.object3D);
+    if (index !== -1) {
+      videoTextureSource.splice(index, 1);
+    }
 
     const material = this.getMaterial();
 
